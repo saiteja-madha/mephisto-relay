@@ -37,6 +37,7 @@
       ],
       "js": [
         "lib/lru.min.js",
+        "src/scripts/chesscom-adapter.js",
         "src/scripts/content-script.js"
       ]
     }

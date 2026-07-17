@@ -3,23 +3,27 @@
 #   $ python remote-engine.py fairy-stockfish -o UCI_Variant:crazyhouse -p 9090
 
 import argparse
+import atexit
 import chess.engine
 import chess.variant
 from chess.engine import MANAGED_OPTIONS
 from flask import Flask, request
+import logging
 import threading
 
 engine_options = {}
 request_counter = 0
 engine_lock = threading.Lock()
 request_lock = threading.Lock()
+engine = None
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 parser = argparse.ArgumentParser(description='A backend to remotely communicate with a chess engine over UCI.')
 parser.add_argument('executable', action='store', help='The path to the UCI chess engine executable.')
 parser.add_argument('--option', '-o', dest='options', action='append',
                     help='Options to configure the engine.')
-parser.add_argument('--port', '-p', dest='port', action='store', default=9090,
+parser.add_argument('--port', '-p', dest='port', action='store', type=int, default=9090,
                     help='The port to run the server on. (default: 9090)')
 args = parser.parse_args()
 
@@ -29,14 +33,14 @@ def format_line(line):
             return {
                 'move': '(none)',
                 'depth': line.get('depth'),
-                'rawScore': f'mate {line.get('score').relative}',
+                'rawScore': f"mate {line.get('score').relative}",
                 'mate': line.get('score').white().mate(),
             }
         else: # stalemate
             return {
                 'move': '(none)',
                 'depth': line.get('depth'),
-                'rawScore': f'cp {line.get('score').relative}',
+                'rawScore': f"cp {line.get('score').relative}",
                 'score': line.get('score').white().score(),
             }
     else: # normal move
@@ -53,7 +57,7 @@ def format_line(line):
             'time': line.get('time'),
             'move': pv[0],
             'pv': pv,
-            'rawScore': f'{score_prefix} {line.get('score').relative}',
+            'rawScore': f"{score_prefix} {line.get('score').relative}",
         }
         score = line.get('score').white()
         if line.get('score').is_mate():
@@ -65,6 +69,8 @@ def format_line(line):
 
 def format_lines(lines):
     lines = list(map(lambda line: format_line(line), lines))
+    if not lines:
+        raise RuntimeError('The engine returned no analysis lines')
     if 'pv' in lines[0]:
         pv0 = lines[0].get('pv')
         return {
@@ -88,9 +94,55 @@ def format_score(score, depth):
     }
 
 
+def start_engine():
+    new_engine = chess.engine.SimpleEngine.popen_uci(args.executable)
+    for option in args.options or []:
+        key, value = option.split(':', 1)
+        engine_options.setdefault(key, value)
+    for key, value in engine_options.items():
+        if key.lower() not in MANAGED_OPTIONS:
+            new_engine.configure({key: value})
+    return new_engine
+
+
+def restart_engine():
+    global engine
+    logger.warning('Restarting the UCI engine process')
+    if engine is not None:
+        try:
+            engine.quit()
+        except Exception:
+            logger.debug('The previous engine process was already unavailable', exc_info=True)
+    engine = start_engine()
+
+
+def analyse_position(data, request_id):
+    variant = engine_options.get('UCI_Variant')
+    if variant is None:
+        board = chess.Board(data.get('fen'))
+    elif variant == 'fischerandom':
+        board = chess.Board(data.get('fen'), chess960=True)
+    else:
+        VariantBoard = chess.variant.find_variant(variant)
+        board = VariantBoard(data.get('fen'))
+
+    if data.get('moves'):
+        for move in data.get('moves').split():
+            board.push(chess.Move.from_uci(move))
+    time_limit = chess.engine.Limit(time=data.get('time') / 1000)
+    multipv = engine_options.get('MultiPV') if 'MultiPV' in engine_options else 1
+
+    with engine.analysis(board, time_limit, multipv=multipv) as analysis:
+        if request_counter == request_id:
+            for _ in analysis:
+                if request_counter != request_id:
+                    break
+    return format_lines(analysis.multipv)
+
+
 @app.route('/analyse', methods=['POST'])
 def analyse():
-    global request_counter, request_lock
+    global request_counter
 
     with request_lock:
         request_counter += 1
@@ -103,27 +155,19 @@ def analyse():
         elif 'time' not in data:
             return {'error': "Parameter 'time' is required"}, 400
 
-        variant = engine_options.get('UCI_Variant')
-        if variant is None:
-            board = chess.Board(data.get('fen'))
-        elif variant == 'fischerandom':
-            board = chess.Board(data.get('fen'), chess960=True)
-        else:
-            VariantBoard = chess.variant.find_variant(variant)
-            board = VariantBoard(data.get('fen'))
-
-        if data.get('moves'):
-            for move in data.get('moves').split():
-                board.push(chess.Move.from_uci(move))
-        time_limit = chess.engine.Limit(time=data.get('time') / 1000)
-        multipv = engine_options.get('MultiPV') if 'MultiPV' in engine_options else 1
-
-        with engine.analysis(board, time_limit, multipv=multipv) as analysis:
-            if request_counter == request_id: #
-                for _ in analysis:
-                    if request_counter != request_id:
-                        break # request was cancelled
-        return format_lines(analysis.multipv)
+        try:
+            return analyse_position(data, request_id)
+        except chess.engine.EngineTerminatedError:
+            logger.exception('The UCI engine process terminated during analysis')
+            try:
+                restart_engine()
+                return analyse_position(data, request_id)
+            except Exception as exc:
+                logger.exception('Analysis failed after restarting the engine')
+                return {'error': str(exc), 'type': type(exc).__name__}, 500
+        except Exception as exc:
+            logger.exception('Engine analysis failed')
+            return {'error': str(exc), 'type': type(exc).__name__}, 500
 
 
 @app.route('/configure', methods=['POST'])
@@ -144,11 +188,22 @@ def config():
     return cfg
 
 
+@app.route('/health', methods=['GET'])
+def health():
+    alive = engine is not None and not engine.protocol.returncode.done()
+    return {'status': 'ok' if alive else 'engine-unavailable'}, 200 if alive else 503
+
+
+def close_engine():
+    if engine is not None:
+        try:
+            engine.quit()
+        except Exception:
+            pass
+
+
 if __name__ == '__main__':
-    engine = chess.engine.SimpleEngine.popen_uci(args.executable)
-    for option in args.options or []:
-        key, value = option.split(':')
-        engine_options[key] = value
-        if not key.lower() in MANAGED_OPTIONS:
-            engine.configure({key: value})
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
+    engine = start_engine()
+    atexit.register(close_engine)
     app.run(port=args.port)

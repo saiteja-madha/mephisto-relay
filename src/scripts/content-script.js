@@ -163,6 +163,9 @@ function scrapePositionPuz() {
 }
 
 function getOrientation() {
+    if (site === 'chesscom' && window.MephistoChessComAdapter) {
+        return window.MephistoChessComAdapter.getOrientation();
+    }
     let orientedBlack = true;
     if (site === 'chesscom') {
         const topLeftCoord = document.querySelector('.coordinate-light')
@@ -204,6 +207,9 @@ function getSelectedMoveRecord() {
 function getMoveRecords() {
     let moves;
     if (site === 'chesscom') {  // wc-chess-board
+        if (window.MephistoChessComAdapter) {
+            return window.MephistoChessComAdapter.getMoveRecords();
+        }
         moves = document.querySelectorAll('.node'); // vs player + computer (new)
         if (moves.length === 0) {
             moves = document.querySelectorAll('.move-text-component'); // vs player + computer (old)
@@ -328,6 +334,9 @@ function getRanksFiles() {
 function getBoard() {
     let board;
     if (site === 'chesscom') {
+        if (window.MephistoChessComAdapter) {
+            return window.MephistoChessComAdapter.getBoard();
+        }
         board = document.querySelector('.board');
     } else if (site === 'lichess') {
         board = document.querySelector('.main-board');
@@ -339,6 +348,9 @@ function getBoard() {
 
 function getPieces() {
     if (site === 'chesscom') {
+        if (window.MephistoChessComAdapter) {
+            return window.MephistoChessComAdapter.getPieces();
+        }
         return document.querySelectorAll('.piece');
     } else {
         let pieceSelector;

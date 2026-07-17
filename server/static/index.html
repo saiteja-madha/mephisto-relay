@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Mephisto Live Monitor</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="/static/app.js" defer></script>
+</head>
+<body>
+<main>
+    <section class="panel controls">
+        <h1>Mephisto Live Monitor</h1>
+        <form id="start-form">
+            <label for="game-id">Chess.com game ID or URL</label>
+            <input id="game-id" name="gameId" required placeholder="https://www.chess.com/game/123456789">
+
+            <fieldset>
+                <legend>Your color</legend>
+                <label><input type="radio" name="color" value="white" checked> White</label>
+                <label><input type="radio" name="color" value="black"> Black</label>
+            </fieldset>
+
+            <label class="filter-toggle">
+                <input id="player-only" type="checkbox">
+                Only show my move
+            </label>
+
+            <div class="buttons">
+                <button id="start" type="submit">Start monitoring</button>
+                <button id="stop" type="button" disabled>Stop</button>
+            </div>
+        </form>
+        <p id="status" class="status" data-kind="idle">Not monitoring</p>
+    </section>
+
+    <section class="panel result" aria-live="polite">
+        <div id="turn" class="turn">Waiting for a game…</div>
+        <div class="move-card primary">
+            <span id="primary-label">Current best move</span>
+            <strong id="primary-move">—</strong>
+        </div>
+        <div class="move-card response">
+            <span id="response-label">Best response</span>
+            <strong id="response-move">—</strong>
+        </div>
+        <div class="board-frame">
+            <img id="analysis-image" alt="The current position and recommended moves" hidden>
+            <div id="image-placeholder">The analyzed board will appear here.</div>
+        </div>
+        <div class="legend">
+            <span class="best-dot"></span><span id="best-legend">Current best move</span>
+            <span id="response-legend-group"><span class="response-dot"></span>Best response</span>
+        </div>
+    </section>
+</main>
+</body>
+</html>
