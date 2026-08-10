@@ -1,17 +1,25 @@
-from base64 import b64encode
 from functools import lru_cache
+from hashlib import blake2s
 from html import escape
 from pathlib import Path
+from xml.etree import ElementTree
 
 BOARD_SIZE = 560
 SQUARE_SIZE = BOARD_SIZE // 8
-PIECE_ROOT = Path(__file__).resolve().parents[1] / "res" / "chesspieces" / "neo"
+PIECE_ROOT = Path(__file__).resolve().parents[1] / "res" / "chesspieces" / "riohacha"
+
+ElementTree.register_namespace("", "http://www.w3.org/2000/svg")
 
 
 @lru_cache(maxsize=12)
-def _piece_data_url(piece: str) -> str:
-    image = (PIECE_ROOT / f"{piece}.png").read_bytes()
-    return "data:image/png;base64," + b64encode(image).decode("ascii")
+def _piece_vector(piece: str) -> tuple[str, str]:
+    root = ElementTree.parse(PIECE_ROOT / f"{piece}.svg").getroot()
+    view_box = root.attrib.get("viewBox")
+    if not view_box:
+        raise ValueError(f"piece {piece} does not define a viewBox")
+    contents = "".join(ElementTree.tostring(child, encoding="unicode") for child in root)
+    contents = contents.replace(' xmlns="http://www.w3.org/2000/svg"', "")
+    return view_box, contents
 
 
 def _pieces_from_fen(fen: str):
@@ -63,21 +71,21 @@ def render_analysis_svg(
 ) -> bytes:
     orientation = "black" if orientation == "black" else "white"
     pieces = list(_pieces_from_fen(fen))
+    render_token = blake2s(
+        f"{fen}|{orientation}|{primary_move}|{response_move}".encode(), digest_size=4
+    ).hexdigest()
+    best_marker = f"best-arrow-{render_token}"
+    response_marker = f"response-arrow-{render_token}"
     parts = [
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{BOARD_SIZE}" height="{BOARD_SIZE}" '
         f'viewBox="0 0 {BOARD_SIZE} {BOARD_SIZE}" role="img" '
         f'aria-label="Best move {escape(primary_move)}; response {escape(response_move)}">',
         "<defs>",
-        '<marker id="best-arrow" markerUnits="userSpaceOnUse" markerWidth="22" markerHeight="22" '
+        f'<marker id="{best_marker}" markerUnits="userSpaceOnUse" markerWidth="22" markerHeight="22" '
         'refX="18" refY="11" orient="auto"><path d="M0,0 L0,22 L22,11 z" fill="#1769d2" /></marker>',
-        '<marker id="response-arrow" markerUnits="userSpaceOnUse" markerWidth="22" markerHeight="22" '
+        f'<marker id="{response_marker}" markerUnits="userSpaceOnUse" markerWidth="22" markerHeight="22" '
         'refX="18" refY="11" orient="auto"><path d="M0,0 L0,22 L22,11 z" fill="#d64a3a" /></marker>',
     ]
-    for piece in sorted({item[0] for item in pieces}):
-        parts.append(
-            f'<image id="piece-{piece}" href="{_piece_data_url(piece)}" '
-            f'width="{SQUARE_SIZE - 6}" height="{SQUARE_SIZE - 6}" />'
-        )
     parts.append("</defs>")
 
     for row in range(8):
@@ -92,12 +100,15 @@ def render_analysis_svg(
         if orientation == "black":
             file_index = 7 - file_index
             rank_index = 7 - rank_index
+        view_box, contents = _piece_vector(piece)
         parts.append(
-            f'<use href="#piece-{piece}" x="{file_index * SQUARE_SIZE + 3}" '
-            f'y="{rank_index * SQUARE_SIZE + 3}" />'
+            f'<svg x="{file_index * SQUARE_SIZE + 3}" y="{rank_index * SQUARE_SIZE + 3}" '
+            f'width="{SQUARE_SIZE - 6}" height="{SQUARE_SIZE - 6}" '
+            f'viewBox="{view_box}" preserveAspectRatio="xMidYMid meet">'
+            f"{contents}</svg>"
         )
 
-    parts.append(_arrow(primary_move, orientation, "#1769d2", "best-arrow"))
-    parts.append(_arrow(response_move, orientation, "#d64a3a", "response-arrow"))
+    parts.append(_arrow(primary_move, orientation, "#1769d2", best_marker))
+    parts.append(_arrow(response_move, orientation, "#d64a3a", response_marker))
     parts.append("</svg>")
     return "".join(parts).encode("utf-8")

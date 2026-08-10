@@ -40,22 +40,89 @@ class ApiTests(unittest.TestCase):
         session_id = self.create_session()
         registry = self.app.extensions["mephisto_registry"]
         session = registry.get(session_id)
-        session.set_analysis_images(b"<svg id='all'></svg>", b"<svg id='player'></svg>")
+        first_version = session.set_analysis_images(
+            b"<svg id='all-first'></svg>", b"<svg id='player-first'></svg>"
+        )
+        session.set_analysis_images(
+            b"<svg id='all-second'></svg>", b"<svg id='player-second'></svg>"
+        )
 
         image_response = self.client.get(f"/api/sessions/{session_id}/latest.svg")
         self.assertEqual(image_response.status_code, 200)
         self.assertEqual(image_response.mimetype, "image/svg+xml")
+        self.assertIn(b"all-second", image_response.data)
+
+        versioned_response = self.client.get(
+            f"/api/sessions/{session_id}/latest.svg?v={first_version}"
+        )
+        self.assertEqual(versioned_response.status_code, 200)
+        self.assertIn(b"all-first", versioned_response.data)
 
         player_response = self.client.get(f"/api/sessions/{session_id}/latest-player.svg")
         self.assertEqual(player_response.status_code, 200)
-        self.assertIn(b"player", player_response.data)
+        self.assertIn(b"player-second", player_response.data)
+
+        player_versioned_response = self.client.get(
+            f"/api/sessions/{session_id}/latest-player.svg?v={first_version}"
+        )
+        self.assertEqual(player_versioned_response.status_code, 200)
+        self.assertIn(b"player-first", player_versioned_response.data)
 
         stop_response = self.client.delete(f"/api/sessions/{session_id}")
         self.assertEqual(stop_response.status_code, 204)
         self.assertTrue(session.stopped.is_set())
 
+    def test_latest_event_route_returns_current_session_state(self):
+        session_id = self.create_session()
+        registry = self.app.extensions["mephisto_registry"]
+        session = registry.get(session_id)
+        session.publish(
+            {
+                "type": "analysis",
+                "turn": "player",
+                "sideToMove": "white",
+                "primaryMove": "e2e4",
+                "responseMove": "e7e5",
+            }
+        )
+
+        response = self.client.get(f"/api/sessions/{session_id}/latest")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["sessionId"], session_id)
+        self.assertEqual(payload["gameId"], "123456789")
+        self.assertEqual(payload["playerColor"], "white")
+        self.assertEqual(payload["primaryMove"], "e2e4")
+
+    def test_svg_history_rejects_an_evicted_version(self):
+        session_id = self.create_session()
+        registry = self.app.extensions["mephisto_registry"]
+        session = registry.get(session_id)
+
+        versions = [
+            session.set_analysis_images(
+                f"<svg id='all-{index}'></svg>".encode(),
+                f"<svg id='player-{index}'></svg>".encode(),
+            )
+            for index in range(9)
+        ]
+
+        evicted_response = self.client.get(
+            f"/api/sessions/{session_id}/latest.svg?v={versions[0]}"
+        )
+        self.assertEqual(evicted_response.status_code, 409)
+
+        retained_response = self.client.get(
+            f"/api/sessions/{session_id}/latest.svg?v={versions[-1]}"
+        )
+        self.assertEqual(retained_response.status_code, 200)
+        self.assertIn(b"all-8", retained_response.data)
+
     def test_unknown_session_returns_404(self):
         response = self.client.get("/api/sessions/missing/latest.svg")
+        self.assertEqual(response.status_code, 404)
+        response = self.client.get("/api/sessions/missing/latest")
         self.assertEqual(response.status_code, 404)
 
     def test_sse_uses_named_events(self):

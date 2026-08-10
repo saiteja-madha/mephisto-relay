@@ -20,6 +20,8 @@ from .svg_renderer import render_analysis_svg
 
 LOGGER = logging.getLogger(__name__)
 
+IMAGE_HISTORY_LIMIT = 8
+
 
 @dataclass
 class MonitoringSession:
@@ -30,6 +32,8 @@ class MonitoringSession:
     latest_event: dict = field(default_factory=lambda: {"type": "connecting"})
     latest_svg: Optional[bytes] = None
     latest_player_svg: Optional[bytes] = None
+    image_history: dict[int, bytes] = field(default_factory=dict)
+    player_image_history: dict[int, bytes] = field(default_factory=dict)
     version: int = 0
     task: Optional[Future] = None
     lock: threading.Lock = field(default_factory=threading.Lock)
@@ -56,10 +60,25 @@ class MonitoringSession:
 
     def set_analysis_images(self, image: bytes, player_image: bytes) -> int:
         with self.lock:
+            self.version += 1
             self.latest_svg = image
             self.latest_player_svg = player_image
-            self.version += 1
+            self.image_history[self.version] = image
+            self.player_image_history[self.version] = player_image
+            while len(self.image_history) > IMAGE_HISTORY_LIMIT:
+                oldest_version = next(iter(self.image_history))
+                del self.image_history[oldest_version]
+                del self.player_image_history[oldest_version]
             return self.version
+
+    def get_analysis_image(
+        self, version: Optional[int], player_only: bool = False
+    ) -> Optional[bytes]:
+        with self.lock:
+            if version is None:
+                return self.latest_player_svg if player_only else self.latest_svg
+            history = self.player_image_history if player_only else self.image_history
+            return history.get(version)
 
 
 class SessionRegistry:

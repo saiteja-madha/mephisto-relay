@@ -122,15 +122,35 @@ def create_app(start_monitor: bool = True) -> Flask:
             },
         )
 
+    @app.get("/api/sessions/<session_id>/latest")
+    def latest_analysis(session_id):
+        """Return the newest session event for clients waking from suspension."""
+        session = registry.get(session_id)
+        if not session:
+            return jsonify({"error": "session not found"}), 404
+        with session.lock:
+            event = dict(session.latest_event)
+        event.setdefault("sessionId", session.id)
+        event.setdefault("gameId", session.target.game_id)
+        event.setdefault("playerColor", session.target.player_color)
+        event.setdefault("opponentColor", session.target.opponent_color)
+        return jsonify(event)
+
     @app.get("/api/sessions/<session_id>/latest.svg")
     def latest_image(session_id):
         session = registry.get(session_id)
         if not session:
             return jsonify({"error": "session not found"}), 404
-        with session.lock:
-            image = session.latest_svg
+        version = request.args.get("v", type=int)
+        image = session.get_analysis_image(version)
         if image is None:
-            return jsonify({"error": "analysis image is not ready"}), 404
+            version_requested = version is not None
+            message = (
+                "analysis image version is no longer available"
+                if version_requested
+                else "analysis image is not ready"
+            )
+            return jsonify({"error": message}), 409 if version_requested else 404
         return Response(image, mimetype="image/svg+xml")
 
     @app.get("/api/sessions/<session_id>/latest-player.svg")
@@ -138,10 +158,16 @@ def create_app(start_monitor: bool = True) -> Flask:
         session = registry.get(session_id)
         if not session:
             return jsonify({"error": "session not found"}), 404
-        with session.lock:
-            image = session.latest_player_svg
+        version = request.args.get("v", type=int)
+        image = session.get_analysis_image(version, player_only=True)
         if image is None:
-            return jsonify({"error": "analysis image is not ready"}), 404
+            version_requested = version is not None
+            message = (
+                "analysis image version is no longer available"
+                if version_requested
+                else "analysis image is not ready"
+            )
+            return jsonify({"error": message}), 409 if version_requested else 404
         return Response(image, mimetype="image/svg+xml")
 
     @app.delete("/api/sessions/<session_id>")

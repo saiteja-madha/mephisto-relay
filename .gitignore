@@ -4,3 +4,7 @@ __pycache__/
 *.py[cod]
 .venv/
 server/.auth/
+mobile/.expo/
+mobile/ios/
+mobile/node_modules/
+mobile/.env.local

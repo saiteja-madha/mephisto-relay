@@ -298,14 +298,21 @@ and click **Start monitoring**.
 
 ### HTTP and SSE API
 
-| Method   | Endpoint                               | Purpose                                              |
-| -------- | -------------------------------------- | ---------------------------------------------------- | -------- |
-| `POST`   | `/api/sessions`                        | Start a session with `{"gameId":"...","color":"white | black"}` |
-| `GET`    | `/api/sessions/<id>/events`            | Receive named SSE events and 15-second heartbeats    |
-| `GET`    | `/api/sessions/<id>/latest.svg`        | Current board with the best move and response        |
-| `GET`    | `/api/sessions/<id>/latest-player.svg` | Current board with only the player's move            |
-| `DELETE` | `/api/sessions/<id>`                   | Stop monitoring and close the game tab               |
-| `GET`    | `http://127.0.0.1:9090/health`         | Check the remote Stockfish process                   |
+| Method   | Endpoint                               | Purpose                                                   |
+| -------- | -------------------------------------- | --------------------------------------------------------- |
+| `POST`   | `/api/sessions`                        | Start with a game ID and player color                     |
+| `GET`    | `/api/sessions/<id>/events`            | Receive named SSE events and 15-second heartbeats         |
+| `GET`    | `/api/sessions/<id>/latest`            | Retrieve the newest event after a mobile background wake  |
+| `GET`    | `/api/sessions/<id>/latest.svg`        | Current board with the best move and response             |
+| `GET`    | `/api/sessions/<id>/latest-player.svg` | Current board with only the player's move                 |
+| `DELETE` | `/api/sessions/<id>`                   | Stop monitoring and close the game tab                    |
+| `GET`    | `http://127.0.0.1:9090/health`         | Check the remote Stockfish process                        |
+
+The `POST /api/sessions` body is:
+
+```json
+{"gameId": "123456789", "color": "white"}
+```
 
 The primary SSE event types are `connecting`, `monitoring`, `analysis`, `analysis-error`, `reconnecting`, and
 `stopped`. An `analysis` payload includes turn ownership, both UCI moves, FEN, evaluation data, and URLs for both
@@ -321,6 +328,7 @@ SVG variants. `EventSource` reconnects automatically if the HTTP stream is inter
 | `MEPHISTO_BROWSER_PROFILE` | `server/.auth/chromium-profile`            | Persistent profile used by `launch_browser.py`            |
 | `MEPHISTO_COMPUTE_TIME_MS` | `1500`                                     | Analysis time for each new position                       |
 | `MEPHISTO_POLL_INTERVAL`   | `0.25`                                     | Chess.com position polling interval in seconds            |
+| `MEPHISTO_HOST`            | `127.0.0.1`                                | Bind address; use `0.0.0.0` for LAN mobile testing        |
 | `MEPHISTO_PORT`            | `8080`                                     | Web client and API port                                   |
 | `MEPHISTO_LOG_LEVEL`       | `DEBUG`                                    | Server log verbosity                                      |
 
@@ -347,6 +355,34 @@ source server/.venv/bin/activate
 python -m unittest discover -s server/tests -v
 ```
 
+## iOS Expo Client
+
+The dedicated [`mobile/`](mobile/) application provides the same session controls and live analysis as the web
+UI, plus a local ActivityKit Live Activity for the Lock Screen and Dynamic Island.
+
+```mermaid
+flowchart LR
+    APP["Expo iOS app"]
+    SSE["Foreground SSE"]
+    LOCATION["Background location task"]
+    LATEST["Latest-event HTTP endpoint"]
+    ACTIVITY["Local ActivityKit update"]
+    ISLAND["Dynamic Island / Lock Screen"]
+    SERVER["Mephisto Relay server"]
+
+    APP -->|"start / stop"| SERVER
+    SERVER --> SSE --> APP
+    LOCATION --> APP
+    APP --> LATEST --> SERVER
+    APP --> ACTIVITY --> ISLAND
+```
+
+APNs is not required for this MVP. Foreground events update the Live Activity immediately; background location
+callbacks fetch the newest session event and update it locally. The workaround is best-effort and stops if the
+user force-quits the app.
+
+See the [mobile setup, device build, permissions, and limitations](mobile/README.md) for complete instructions.
+
 ## Contributing to Mephisto Relay
 
 Contributions should support the project's remote-monitoring purpose rather than extend the original toolbar
@@ -363,7 +399,8 @@ popup. Useful areas include:
 
 ### Development workflow
 
-1. Create the Python environment and install dependencies using the installation steps above.
+1. Create the Python environment and install dependencies using the installation steps above. For mobile work,
+   also install the dependencies under `mobile/`.
 2. Make the smallest change that solves one clearly defined problem.
 3. Add or update tests under `server/tests/` for server-side behavior.
 4. Run the complete test suite:
@@ -373,9 +410,18 @@ popup. Useful areas include:
    python -m unittest discover -s server/tests -v
    ```
 
-5. For monitoring changes, test both White and Black player colors, both sides to move, normal and player-only
+5. For mobile changes, also run:
+
+   ```bash
+   cd mobile
+   npm run typecheck
+   npm test
+   ```
+
+6. For monitoring changes, test both White and Black player colors, both sides to move, normal and player-only
    display modes, SSE stop/reconnect behavior, and browser-tab cleanup.
-6. Describe any manual Chess.com verification performed and include sanitized logs when reporting failures.
+7. Describe any manual Chess.com and iOS verification performed and include sanitized logs when reporting
+   failures.
 
 ### Architecture guidelines
 
